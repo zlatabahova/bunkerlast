@@ -635,6 +635,11 @@ def start_bot():
     """Запускает Telegram бота в фоновом потоке"""
     print("🚀 Запуск Telegram бота в фоновом потоке...", flush=True)
     try:
+        # Создаём и устанавливаем цикл событий для этого потока
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
         # Инициализация БД и загрузка данных
         init_db()
         load_character_pools()
@@ -729,3 +734,4 @@ print("🚀 Фоновый поток с ботом запущен", flush=True)
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+
