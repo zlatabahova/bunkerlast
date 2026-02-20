@@ -3,7 +3,7 @@
 
 """
 Telegram бот для игры "Бункер"
-Запуск на Render: https://render.com
+Полностью рабочий код для развертывания на Render
 """
 
 import os
@@ -29,11 +29,6 @@ from telegram.ext import (
 )
 from flask import Flask, jsonify
 
-import os
-print("=== DEBUG: Environment variables (names only) ===")
-print("TELEGRAM_TOKEN is set:", "Yes" if os.environ.get("TELEGRAM_TOKEN") else "NO")
-print("SHEETS_URL is set:", "Yes" if os.environ.get("SHEETS_URL") else "NO")
-print("================================================")
 # ================== НАСТРОЙКИ ==================
 # Получаем токен и ссылку из переменных окружения (обязательно)
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
@@ -622,85 +617,6 @@ async def addinfo_category(update: Update, context: CallbackContext):
 # ================== НАСТРОЙКА FLASK ДЛЯ RENDER ==================
 app = Flask(__name__)
 
-def run_bot():
-    """Запускает Telegram бота в фоновом потоке"""
-    # Создаём экземпляр Application
-    application = Application.builder().token(TELEGRAM_TOKEN).build()
-
-    # Обычные команды
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("admin", admin_help))
-    application.add_handler(CommandHandler("info", info))
-    application.add_handler(CommandHandler("createroom", createroom))
-    application.add_handler(CommandHandler("closeroom", closeroom))
-    application.add_handler(CommandHandler("players", players_list))
-    application.add_handler(CommandHandler("reload", reload_data))
-
-    # Диалог входа в комнату
-    room_conv = ConversationHandler(
-        entry_points=[CommandHandler("room", room_join)],
-        states={
-            "WAIT_NICK": [MessageHandler(filters.TEXT & ~filters.COMMAND, room_nick)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-    )
-    application.add_handler(room_conv)
-
-    # Админские диалоги
-    random_conv = ConversationHandler(
-        entry_points=[CommandHandler("random", random_start)],
-        states={
-            SELECT_PLAYER: [MessageHandler(filters.TEXT & ~filters.COMMAND, random_player)],
-            SELECT_CATEGORY: [CallbackQueryHandler(random_category)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-    )
-    application.add_handler(random_conv)
-
-    change_conv = ConversationHandler(
-        entry_points=[CommandHandler("change", change_start)],
-        states={
-            SELECT_PLAYER: [MessageHandler(filters.TEXT & ~filters.COMMAND, change_player)],
-            SELECT_CATEGORY: [CallbackQueryHandler(change_category)],
-            NEW_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, change_value)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-    )
-    application.add_handler(change_conv)
-
-    swap_conv = ConversationHandler(
-        entry_points=[CommandHandler("swap", swap_start)],
-        states={
-            SELECT_PLAYER: [MessageHandler(filters.TEXT & ~filters.COMMAND, swap_player1)],
-            SELECT_PLAYER2: [MessageHandler(filters.TEXT & ~filters.COMMAND, swap_player2)],
-            SELECT_CATEGORY_SWAP: [CallbackQueryHandler(swap_category)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-    )
-    application.add_handler(swap_conv)
-
-    shuffle_conv = ConversationHandler(
-        entry_points=[CommandHandler("shuffle", shuffle_start)],
-        states={
-            SELECT_CATEGORY_SHUFFLE: [CallbackQueryHandler(shuffle_category)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-    )
-    application.add_handler(shuffle_conv)
-
-    addinfo_conv = ConversationHandler(
-        entry_points=[CommandHandler("addinfo", addinfo_start)],
-        states={
-            SELECT_PLAYER: [MessageHandler(filters.TEXT & ~filters.COMMAND, addinfo_player)],
-            SELECT_CATEGORY_ADDINFO: [CallbackQueryHandler(addinfo_category)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-    )
-    application.add_handler(addinfo_conv)
-
-    # Запускаем polling (это блокирующий вызов, поэтому в отдельном потоке)
-    application.run_polling()
-
 # Маршруты Flask для проверки здоровья
 @app.route('/')
 def index():
@@ -714,20 +630,102 @@ def index():
 def health():
     return "OK", 200
 
-# ================== ТОЧКА ВХОДА ==================
-def main():
-    # Инициализация БД и загрузка данных
-    init_db()
-    load_character_pools()
-    
-    # Запускаем бота в отдельном потоке
-    bot_thread = threading.Thread(target=run_bot, daemon=True)
-    bot_thread.start()
-    
-    # Запускаем Flask-сервер (он будет слушать порт из переменной окружения)
+# ================== ЗАПУСК БОТА В ФОНОВОМ ПОТОКЕ (для Render) ==================
+def start_bot():
+    """Запускает Telegram бота в фоновом потоке"""
+    print("🚀 Запуск Telegram бота в фоновом потоке...", flush=True)
+    try:
+        # Инициализация БД и загрузка данных
+        init_db()
+        load_character_pools()
+
+        # Создаём экземпляр Application
+        application = Application.builder().token(TELEGRAM_TOKEN).build()
+
+        # Добавляем все обработчики
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("admin", admin_help))
+        application.add_handler(CommandHandler("info", info))
+        application.add_handler(CommandHandler("createroom", createroom))
+        application.add_handler(CommandHandler("closeroom", closeroom))
+        application.add_handler(CommandHandler("players", players_list))
+        application.add_handler(CommandHandler("reload", reload_data))
+
+        # Диалог входа в комнату
+        room_conv = ConversationHandler(
+            entry_points=[CommandHandler("room", room_join)],
+            states={
+                "WAIT_NICK": [MessageHandler(filters.TEXT & ~filters.COMMAND, room_nick)],
+            },
+            fallbacks=[CommandHandler("cancel", cancel)],
+        )
+        application.add_handler(room_conv)
+
+        # Админские диалоги
+        random_conv = ConversationHandler(
+            entry_points=[CommandHandler("random", random_start)],
+            states={
+                SELECT_PLAYER: [MessageHandler(filters.TEXT & ~filters.COMMAND, random_player)],
+                SELECT_CATEGORY: [CallbackQueryHandler(random_category)],
+            },
+            fallbacks=[CommandHandler("cancel", cancel)],
+        )
+        application.add_handler(random_conv)
+
+        change_conv = ConversationHandler(
+            entry_points=[CommandHandler("change", change_start)],
+            states={
+                SELECT_PLAYER: [MessageHandler(filters.TEXT & ~filters.COMMAND, change_player)],
+                SELECT_CATEGORY: [CallbackQueryHandler(change_category)],
+                NEW_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, change_value)],
+            },
+            fallbacks=[CommandHandler("cancel", cancel)],
+        )
+        application.add_handler(change_conv)
+
+        swap_conv = ConversationHandler(
+            entry_points=[CommandHandler("swap", swap_start)],
+            states={
+                SELECT_PLAYER: [MessageHandler(filters.TEXT & ~filters.COMMAND, swap_player1)],
+                SELECT_PLAYER2: [MessageHandler(filters.TEXT & ~filters.COMMAND, swap_player2)],
+                SELECT_CATEGORY_SWAP: [CallbackQueryHandler(swap_category)],
+            },
+            fallbacks=[CommandHandler("cancel", cancel)],
+        )
+        application.add_handler(swap_conv)
+
+        shuffle_conv = ConversationHandler(
+            entry_points=[CommandHandler("shuffle", shuffle_start)],
+            states={
+                SELECT_CATEGORY_SHUFFLE: [CallbackQueryHandler(shuffle_category)],
+            },
+            fallbacks=[CommandHandler("cancel", cancel)],
+        )
+        application.add_handler(shuffle_conv)
+
+        addinfo_conv = ConversationHandler(
+            entry_points=[CommandHandler("addinfo", addinfo_start)],
+            states={
+                SELECT_PLAYER: [MessageHandler(filters.TEXT & ~filters.COMMAND, addinfo_player)],
+                SELECT_CATEGORY_ADDINFO: [CallbackQueryHandler(addinfo_category)],
+            },
+            fallbacks=[CommandHandler("cancel", cancel)],
+        )
+        application.add_handler(addinfo_conv)
+
+        print("✅ Бот успешно запущен и готов к работе!", flush=True)
+        application.run_polling()
+    except Exception as e:
+        print(f"❌ КРИТИЧЕСКАЯ ОШИБКА В БОТЕ: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+
+# Запускаем бота в отдельном потоке сразу при импорте модуля
+bot_thread = threading.Thread(target=start_bot, daemon=True)
+bot_thread.start()
+print("🚀 Фоновый поток с ботом запущен", flush=True)
+
+# Точка входа для локального запуска (не используется на Render, но оставлено для совместимости)
+if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
-
-if __name__ == "__main__":
-    main()
-
