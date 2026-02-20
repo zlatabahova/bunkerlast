@@ -29,6 +29,11 @@ from telegram.ext import (
 )
 from flask import Flask, jsonify
 
+import os
+print("=== DEBUG: Environment variables (names only) ===")
+print("TELEGRAM_TOKEN is set:", "Yes" if os.environ.get("TELEGRAM_TOKEN") else "NO")
+print("SHEETS_URL is set:", "Yes" if os.environ.get("SHEETS_URL") else "NO")
+print("================================================")
 # ================== НАСТРОЙКИ ==================
 # Получаем токен и ссылку из переменных окружения (обязательно)
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
@@ -725,3 +730,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
