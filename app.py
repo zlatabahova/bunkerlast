@@ -4,6 +4,7 @@
 """
 Telegram бот для игры "Бункер"
 Полностью рабочий код для развертывания на Render
+Исправлена проблема с event loop и сигналами в фоновом потоке.
 """
 
 import os
@@ -15,6 +16,8 @@ import csv
 import requests
 import json
 import threading
+import asyncio
+import traceback
 from io import StringIO
 from functools import wraps
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -30,7 +33,6 @@ from telegram.ext import (
 from flask import Flask, jsonify
 
 # ================== НАСТРОЙКИ ==================
-# Получаем токен и ссылку из переменных окружения (обязательно)
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 if not TELEGRAM_TOKEN:
     print("❌ Ошибка: не задана переменная окружения TELEGRAM_TOKEN")
@@ -39,9 +41,9 @@ if not TELEGRAM_TOKEN:
 GOOGLE_SHEETS_CSV_URL = os.environ.get("SHEETS_URL")
 if not GOOGLE_SHEETS_CSV_URL:
     print("⚠️ Внимание: SHEETS_URL не задана. Бот будет работать с пустыми пулами персонажей.")
-    GOOGLE_SHEETS_CSV_URL = ""  # пустая строка, позже проверим
+    GOOGLE_SHEETS_CSV_URL = ""
 
-ADMIN_ID = 518113103  # Ваш Telegram ID (не меняйте)
+ADMIN_ID = 518113103  # Ваш Telegram ID
 
 # Состояния для диалогов
 (
@@ -55,43 +57,35 @@ ADMIN_ID = 518113103  # Ваш Telegram ID (не меняйте)
     SELECT_CATEGORY_ADDINFO,
 ) = range(8)
 
-# Категории (порядок важен для вывода)
 CATEGORIES = ["Биология", "Профессия", "Здоровье", "Хобби", "Багаж", "Факт", "Особое условие"]
-# Для каких категорий можно хранить несколько значений (список)
 MULTIPLE_CATEGORIES = ["Багаж", "Особое условие"]
 
-# Глобальный пул персонажей (загружается из Google Sheets)
 CHARACTER_POOLS = {cat: [] for cat in CATEGORIES}
 
-# Настройка логирования
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ================== БАЗА ДАННЫХ (SQLite) ==================
+# ================== БАЗА ДАННЫХ ==================
 def init_db():
     conn = sqlite3.connect("bunker.db")
     c = conn.cursor()
-    # Комнаты
     c.execute("""CREATE TABLE IF NOT EXISTS rooms (
         code TEXT PRIMARY KEY,
         created_by INTEGER,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         is_active INTEGER DEFAULT 1
     )""")
-    # Игроки (данные персонажей)
     c.execute("""CREATE TABLE IF NOT EXISTS players (
         user_id INTEGER,
         room_code TEXT,
         nick TEXT,
-        data TEXT,  -- JSON с картами
+        data TEXT,
         PRIMARY KEY (user_id, room_code)
     )""")
-    # Какая комната у пользователя сейчас (текущая)
     c.execute("""CREATE TABLE IF NOT EXISTS user_room (
         user_id INTEGER PRIMARY KEY,
         room_code TEXT
     )""")
-    # Открытая информация
     c.execute("""CREATE TABLE IF NOT EXISTS open_info (
         room_code TEXT,
         player_nick TEXT,
@@ -117,7 +111,6 @@ def db_execute(query, args=(), fetchone=False, fetchall=False):
 
 # ================== ЗАГРУЗКА ДАННЫХ ИЗ GOOGLE SHEETS ==================
 def load_character_pools():
-    """Загружает данные из CSV по ссылке и обновляет CHARACTER_POOLS"""
     global CHARACTER_POOLS
     if not GOOGLE_SHEETS_CSV_URL:
         logger.warning("Ссылка на Google Sheets не задана, пулы останутся пустыми.")
@@ -133,7 +126,6 @@ def load_character_pools():
                 val = row.get(cat, "").strip()
                 if val:
                     pools[cat].append(val)
-        # Проверим, что все категории не пусты
         for cat in CATEGORIES:
             if not pools[cat]:
                 logger.warning(f"Категория {cat} пуста!")
@@ -144,7 +136,7 @@ def load_character_pools():
         logger.error(f"Ошибка загрузки данных: {e}")
         return False
 
-# ================== ДЕКОРАТОР ТОЛЬКО ДЛЯ АДМИНА ==================
+# ================== ДЕКОРАТОР АДМИНА ==================
 def admin_only(func):
     @wraps(func)
     async def wrapper(update: Update, context: CallbackContext, *args, **kwargs):
@@ -156,12 +148,10 @@ def admin_only(func):
 
 # ================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==================
 def get_user_room(user_id):
-    """Возвращает код комнаты, в которой находится пользователь, или None"""
     res = db_execute("SELECT room_code FROM user_room WHERE user_id = ?", (user_id,), fetchone=True)
     return res[0] if res else None
 
 def set_user_room(user_id, room_code):
-    """Записывает пользователя в комнату"""
     db_execute("INSERT OR REPLACE INTO user_room (user_id, room_code) VALUES (?, ?)", (user_id, room_code))
 
 def clear_user_room(user_id):
@@ -172,41 +162,33 @@ def room_exists(room_code):
     return res is not None
 
 def get_players(room_code):
-    """Возвращает список ников игроков в комнате"""
     rows = db_execute("SELECT nick FROM players WHERE room_code = ?", (room_code,), fetchall=True)
     return [r[0] for r in rows]
 
 def get_player_data(room_code, nick):
-    """Возвращает словарь с данными игрока"""
     row = db_execute("SELECT data FROM players WHERE room_code = ? AND nick = ?", (room_code, nick), fetchone=True)
     if not row:
         return None
     return json.loads(row[0])
 
 def save_player_data(room_code, nick, data):
-    """Сохраняет данные игрока"""
     db_execute("UPDATE players SET data = ? WHERE room_code = ? AND nick = ?", (json.dumps(data, ensure_ascii=False), room_code, nick))
 
 def generate_random_character():
-    """Генерирует случайного персонажа из пулов"""
     data = {}
     for cat in CATEGORIES:
         if cat in MULTIPLE_CATEGORIES:
-            # Берём 2 случайных значения
             values = random.sample(CHARACTER_POOLS[cat], min(2, len(CHARACTER_POOLS[cat])))
             data[cat] = values
         else:
-            # Берём одно значение
             data[cat] = [random.choice(CHARACTER_POOLS[cat])]
     return data
 
 def add_open_info(room_code, player_nick, category, value):
-    """Добавляет запись в открытую информацию"""
     db_execute("INSERT INTO open_info (room_code, player_nick, category, value) VALUES (?, ?, ?, ?)",
                (room_code, player_nick, category, value))
 
 def get_open_info(room_code):
-    """Возвращает словарь: {player_nick: {category: [values]}}"""
     rows = db_execute("SELECT player_nick, category, value FROM open_info WHERE room_code = ?", (room_code,), fetchall=True)
     info = {}
     for nick, cat, val in rows:
@@ -254,7 +236,6 @@ async def createroom(update: Update, context: CallbackContext):
         await update.message.reply_text("❌ Комната с таким кодом уже существует.")
         return
     db_execute("INSERT INTO rooms (code, created_by) VALUES (?, ?)", (code, ADMIN_ID))
-    # Админ входит в эту комнату
     set_user_room(ADMIN_ID, code)
     await update.message.reply_text(f"✅ Комната `{code}` создана! Теперь вы в ней.\n"
                                     "Игроки могут заходить по команде `/room {code}`")
@@ -265,7 +246,6 @@ async def closeroom(update: Update, context: CallbackContext):
     if not room:
         await update.message.reply_text("❌ Вы не находитесь в комнате.")
         return
-    # Удаляем все данные комнаты
     db_execute("DELETE FROM open_info WHERE room_code = ?", (room,))
     db_execute("DELETE FROM players WHERE room_code = ?", (room,))
     db_execute("DELETE FROM rooms WHERE code = ?", (room,))
@@ -295,9 +275,7 @@ async def reload_data(update: Update, context: CallbackContext):
     else:
         await update.message.reply_text("❌ Ошибка загрузки. Проверьте ссылку.")
 
-# Диалог входа в комнату
 async def room_join(update: Update, context: CallbackContext):
-    user_id = update.effective_user.id
     args = context.args
     if not args:
         await update.message.reply_text("Введите код комнаты: `/room код`")
@@ -306,7 +284,6 @@ async def room_join(update: Update, context: CallbackContext):
     if not room_exists(code):
         await update.message.reply_text("❌ Комната не найдена.")
         return ConversationHandler.END
-    # Проверяем, не занят ли ник (спросим позже)
     context.user_data["joining_room"] = code
     await update.message.reply_text("Введите ваше игровое имя (ник):")
     return "WAIT_NICK"
@@ -318,12 +295,10 @@ async def room_nick(update: Update, context: CallbackContext):
     if not code:
         await update.message.reply_text("Ошибка, начните сначала: /room код")
         return ConversationHandler.END
-    # Проверяем уникальность ника в комнате
     players = get_players(code)
     if nick in players:
         await update.message.reply_text("❌ Это имя уже занято. Попробуйте другое.")
         return "WAIT_NICK"
-    # Генерируем персонажа
     char_data = generate_random_character()
     db_execute("INSERT INTO players (user_id, room_code, nick, data) VALUES (?, ?, ?, ?)",
                (user_id, code, nick, json.dumps(char_data, ensure_ascii=False)))
@@ -391,7 +366,6 @@ async def random_category(update: Update, context: CallbackContext):
     if not player_data:
         await query.edit_message_text("Ошибка: игрок не найден.")
         return ConversationHandler.END
-    # Берём случайное значение из пула
     if category not in CHARACTER_POOLS or not CHARACTER_POOLS[category]:
         await query.edit_message_text(f"Нет данных для категории {category}.")
         return ConversationHandler.END
@@ -399,7 +373,6 @@ async def random_category(update: Update, context: CallbackContext):
     if category in MULTIPLE_CATEGORIES:
         player_data[category].append(new_val)
     else:
-        # Заменяем (для простоты заменяем)
         player_data[category] = [new_val]
     save_player_data(room, nick, player_data)
     await query.edit_message_text(f"✅ Игроку **{nick}** добавлена карта **{category}**: {new_val}")
@@ -449,7 +422,6 @@ async def change_value(update: Update, context: CallbackContext):
         await update.message.reply_text("Ошибка: игрок не найден.")
         return ConversationHandler.END
     if category in MULTIPLE_CATEGORIES:
-        # Заменяем весь список одним значением (можно и несколько, но для простоты одно)
         player_data[category] = [new_val]
     else:
         player_data[category] = [new_val]
@@ -507,7 +479,6 @@ async def swap_category(update: Update, context: CallbackContext):
     if not data1 or not data2:
         await query.edit_message_text("Ошибка получения данных игроков.")
         return ConversationHandler.END
-    # Обмениваем значения категории
     data1[category], data2[category] = data2[category], data1[category]
     save_player_data(room, nick1, data1)
     save_player_data(room, nick2, data2)
@@ -537,7 +508,6 @@ async def shuffle_category(update: Update, context: CallbackContext):
     category = query.data
     room = context.user_data["room"]
     players = get_players(room)
-    # Собираем все значения этой категории у всех игроков
     all_values = []
     player_values = {}
     for nick in players:
@@ -549,9 +519,7 @@ async def shuffle_category(update: Update, context: CallbackContext):
     if not all_values:
         await query.edit_message_text("Нет значений для перемешивания.")
         return ConversationHandler.END
-    # Перемешиваем
     random.shuffle(all_values)
-    # Раздаём обратно, сохраняя количество у каждого
     new_values = {}
     idx = 0
     for nick, vals in player_values.items():
@@ -559,12 +527,10 @@ async def shuffle_category(update: Update, context: CallbackContext):
         new_vals = all_values[idx:idx+count]
         idx += count
         new_values[nick] = new_vals
-    # Если остались лишние (из-за неравенства количества), добавим первому
     if idx < len(all_values):
         remaining = all_values[idx:]
         first_nick = list(player_values.keys())[0]
         new_values[first_nick].extend(remaining)
-    # Сохраняем
     for nick, vals in new_values.items():
         data = get_player_data(room, nick)
         data[category] = vals
@@ -617,7 +583,6 @@ async def addinfo_category(update: Update, context: CallbackContext):
 # ================== НАСТРОЙКА FLASK ДЛЯ RENDER ==================
 app = Flask(__name__)
 
-# Маршруты Flask для проверки здоровья
 @app.route('/')
 def index():
     return jsonify({
@@ -630,24 +595,20 @@ def index():
 def health():
     return "OK", 200
 
-# ================== ЗАПУСК БОТА В ФОНОВОМ ПОТОКЕ (для Render) ==================
+# ================== ЗАПУСК БОТА В ФОНОВОМ ПОТОКЕ ==================
 def start_bot():
-    """Запускает Telegram бота в фоновом потоке"""
     print("🚀 Запуск Telegram бота в фоновом потоке...", flush=True)
     try:
-        # Создаём и устанавливаем цикл событий для этого потока
-        import asyncio
+        # Создаём цикл событий для этого потока
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
-        # Инициализация БД и загрузка данных
         init_db()
         load_character_pools()
 
-        # Создаём экземпляр Application
         application = Application.builder().token(TELEGRAM_TOKEN).build()
 
-        # Добавляем все обработчики
+        # Обычные команды
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CommandHandler("admin", admin_help))
         application.add_handler(CommandHandler("info", info))
@@ -719,19 +680,18 @@ def start_bot():
         application.add_handler(addinfo_conv)
 
         print("✅ Бот успешно запущен и готов к работе!", flush=True)
-        application.run_polling()
+        # Запускаем polling без обработчиков сигналов (т.к. мы в фоновом потоке)
+        application.run_polling(stop_signals=None)
     except Exception as e:
         print(f"❌ КРИТИЧЕСКАЯ ОШИБКА В БОТЕ: {e}", flush=True)
-        import traceback
         traceback.print_exc()
 
-# Запускаем бота в отдельном потоке сразу при импорте модуля
+# Запускаем бота в отдельном потоке сразу при импорте
 bot_thread = threading.Thread(target=start_bot, daemon=True)
 bot_thread.start()
 print("🚀 Фоновый поток с ботом запущен", flush=True)
 
-# Точка входа для локального запуска (не используется на Render, но оставлено для совместимости)
+# Для локального запуска (не на Render)
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
-
