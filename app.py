@@ -3,8 +3,9 @@
 
 """
 Telegram бот для игры "Бункер"
-Полностью рабочий код для развертывания на Render
-Исправлена проблема с пустыми категориями.
+Добавлены команды:
+- /mycard - посмотреть своего персонажа
+- /card1 и /card2 - специальные карты (одноразовые)
 """
 
 import os
@@ -79,7 +80,7 @@ def init_db():
         user_id INTEGER,
         room_code TEXT,
         nick TEXT,
-        data TEXT,
+        data TEXT,  -- JSON с картами и used_cards
         PRIMARY KEY (user_id, room_code)
     )""")
     c.execute("""CREATE TABLE IF NOT EXISTS user_room (
@@ -210,7 +211,10 @@ async def start(update: Update, context: CallbackContext):
     await update.message.reply_text(
         "👋 Добро пожаловать в игру **Бункер**!\n\n"
         "📌 **Для игроков:**\n"
-        "/room <код> – войти в комнату (или создать, если вы админ)\n"
+        "/room <код> – войти в комнату\n"
+        "/mycard – посмотреть своего персонажа\n"
+        "/card1 – использовать специальную карту 1\n"
+        "/card2 – использовать специальную карту 2\n"
         "/info – показать открытую информацию\n\n"
         "🔐 Команды администратора доступны по /admin"
     )
@@ -310,16 +314,84 @@ async def room_nick(update: Update, context: CallbackContext):
         await update.message.reply_text("❌ Это имя уже занято. Попробуйте другое.")
         return "WAIT_NICK"
     char_data = generate_random_character()
+    # Добавляем поле для использованных карт
+    char_data["used_cards"] = []
     db_execute("INSERT INTO players (user_id, room_code, nick, data) VALUES (?, ?, ?, ?)",
                (user_id, code, nick, json.dumps(char_data, ensure_ascii=False)))
     set_user_room(user_id, code)
     await update.message.reply_text(f"✅ Вы вошли в комнату `{code}` под именем **{nick}**.\n"
-                                    "Ваш персонаж создан. Используйте /info для просмотра открытой информации.")
+                                    "Ваш персонаж создан. Используйте /mycard чтобы увидеть его.")
     return ConversationHandler.END
 
 async def cancel(update: Update, context: CallbackContext):
     await update.message.reply_text("Действие отменено.")
     return ConversationHandler.END
+
+async def mycard(update: Update, context: CallbackContext):
+    """Показывает игроку его полную карту персонажа (все категории)."""
+    user_id = update.effective_user.id
+    room = get_user_room(user_id)
+    if not room:
+        await update.message.reply_text("❌ Вы не в комнате. Войдите через /room код")
+        return
+    # Получаем ник игрока по user_id в этой комнате
+    players = db_execute("SELECT nick, data FROM players WHERE user_id = ? AND room_code = ?", (user_id, room), fetchone=True)
+    if not players:
+        await update.message.reply_text("❌ Не удалось найти ваши данные. Попробуйте перезайти.")
+        return
+    nick, data_json = players
+    data = json.loads(data_json)
+    text = f"**🃏 Ваш персонаж, {nick}:**\n"
+    for cat in CATEGORIES:
+        values = data.get(cat, ["Нет данных"])
+        if isinstance(values, list):
+            vals_str = ", ".join(values)
+        else:
+            vals_str = str(values)
+        text += f"• **{cat}:** {vals_str}\n"
+    # Можно также показать, какие карты уже использованы (опционально)
+    used = data.get("used_cards", [])
+    if used:
+        text += f"💡 Использованные карты: {', '.join(used)}"
+    await update.message.reply_text(text)
+
+async def card1(update: Update, context: CallbackContext):
+    """Использование специальной карты 1 (одноразовая)."""
+    await use_card(update, context, "card1")
+
+async def card2(update: Update, context: CallbackContext):
+    """Использование специальной карты 2 (одноразовая)."""
+    await use_card(update, context, "card2")
+
+async def use_card(update: Update, context: CallbackContext, card_name: str):
+    """Общая логика для card1 и card2."""
+    user_id = update.effective_user.id
+    room = get_user_room(user_id)
+    if not room:
+        await update.message.reply_text("❌ Вы не в комнате. Войдите через /room код")
+        return
+    # Получаем данные игрока
+    player = db_execute("SELECT nick, data FROM players WHERE user_id = ? AND room_code = ?", (user_id, room), fetchone=True)
+    if not player:
+        await update.message.reply_text("❌ Не удалось найти ваши данные.")
+        return
+    nick, data_json = player
+    data = json.loads(data_json)
+    # Проверяем, использовал ли уже эту карту
+    used_cards = data.get("used_cards", [])
+    if card_name in used_cards:
+        await update.message.reply_text(f"❌ Вы уже использовали карту {card_name} в этой игре.")
+        return
+    # Добавляем в список использованных
+    used_cards.append(card_name)
+    data["used_cards"] = used_cards
+    save_player_data(room, nick, data)
+    # Уведомляем админа
+    await context.bot.send_message(
+        chat_id=ADMIN_ID,
+        text=f"🔔 Игрок **{nick}** в комнате `{room}` использовал карту **{card_name}**."
+    )
+    await update.message.reply_text(f"✅ Карта {card_name} активирована! Админ уведомлён.")
 
 async def info(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
@@ -625,6 +697,9 @@ def start_bot():
         application.add_handler(CommandHandler("closeroom", closeroom))
         application.add_handler(CommandHandler("players", players_list))
         application.add_handler(CommandHandler("reload", reload_data))
+        application.add_handler(CommandHandler("mycard", mycard))
+        application.add_handler(CommandHandler("card1", card1))
+        application.add_handler(CommandHandler("card2", card2))
 
         # Диалог входа в комнату
         room_conv = ConversationHandler(
@@ -701,4 +776,3 @@ print("🚀 Фоновый поток с ботом запущен", flush=True)
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
-    
