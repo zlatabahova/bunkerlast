@@ -4,7 +4,7 @@
 """
 Telegram бот для игры "Бункер"
 Полностью рабочий код для развертывания на Render
-Исправлена проблема с event loop и сигналами в фоновом потоке.
+Исправлена проблема с пустыми категориями.
 """
 
 import os
@@ -175,13 +175,23 @@ def save_player_data(room_code, nick, data):
     db_execute("UPDATE players SET data = ? WHERE room_code = ? AND nick = ?", (json.dumps(data, ensure_ascii=False), room_code, nick))
 
 def generate_random_character():
+    """Генерирует случайного персонажа. Если категория пуста, ставит 'Нет данных'."""
     data = {}
     for cat in CATEGORIES:
-        if cat in MULTIPLE_CATEGORIES:
-            values = random.sample(CHARACTER_POOLS[cat], min(2, len(CHARACTER_POOLS[cat])))
-            data[cat] = values
+        pool = CHARACTER_POOLS.get(cat, [])
+        if not pool:
+            # Категория пуста – используем заглушку
+            if cat in MULTIPLE_CATEGORIES:
+                data[cat] = ["Нет данных"] * 2
+            else:
+                data[cat] = ["Нет данных"]
         else:
-            data[cat] = [random.choice(CHARACTER_POOLS[cat])]
+            # Данные есть – работаем как обычно
+            if cat in MULTIPLE_CATEGORIES:
+                values = random.sample(pool, min(2, len(pool)))
+                data[cat] = values
+            else:
+                data[cat] = [random.choice(pool)]
     return data
 
 def add_open_info(room_code, player_nick, category, value):
@@ -599,7 +609,6 @@ def health():
 def start_bot():
     print("🚀 Запуск Telegram бота в фоновом потоке...", flush=True)
     try:
-        # Создаём цикл событий для этого потока
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
@@ -680,18 +689,16 @@ def start_bot():
         application.add_handler(addinfo_conv)
 
         print("✅ Бот успешно запущен и готов к работе!", flush=True)
-        # Запускаем polling без обработчиков сигналов (т.к. мы в фоновом потоке)
         application.run_polling(stop_signals=None)
     except Exception as e:
         print(f"❌ КРИТИЧЕСКАЯ ОШИБКА В БОТЕ: {e}", flush=True)
         traceback.print_exc()
 
-# Запускаем бота в отдельном потоке сразу при импорте
 bot_thread = threading.Thread(target=start_bot, daemon=True)
 bot_thread.start()
 print("🚀 Фоновый поток с ботом запущен", flush=True)
 
-# Для локального запуска (не на Render)
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+    
