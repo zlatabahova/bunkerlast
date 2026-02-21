@@ -1,26 +1,20 @@
 import asyncio
 import logging
+import sys
+import traceback
 from aiogram import Bot, Dispatcher, types
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiohttp import web
-import asyncpg
 
 from config import BOT_TOKEN, WEBHOOK_URL, WEBHOOK_PATH, WEBAPP_HOST, WEBAPP_PORT, SPREADSHEET_ID
 from db import create_pool, init_db, pool as db_pool_global
 from google_sheets import load_from_sheets, update_pool
 from handlers import common, room, player, info, admin_actions
 
-import sys
-import traceback
-
-print("=== STARTING BOT ===", file=sys.stderr)
-sys.stderr.flush()
-
 logging.basicConfig(level=logging.INFO)
 
-async def on_startup(bot: Bot, db_pool: asyncpg.Pool):
+async def on_startup(bot: Bot, db_pool):
     await init_db(db_pool)
-    # Загрузка данных из Google Sheets
     try:
         categories = await load_from_sheets(SPREADSHEET_ID)
         async with db_pool.acquire() as conn:
@@ -40,6 +34,7 @@ async def handle_webhook(request):
     return web.Response()
 
 def main():
+    global bot, dp
     app = web.Application()
     app.router.add_post(WEBHOOK_PATH, handle_webhook)
 
@@ -54,7 +49,6 @@ def main():
     dp.include_router(info.router)
     dp.include_router(admin_actions.router)
 
-    # Передаём пул в глобальную переменную для доступа из хендлеров
     async def init_pool():
         global db_pool_global
         db_pool_global = await create_pool()
@@ -67,4 +61,12 @@ def main():
     web.run_app(app, host=WEBAPP_HOST, port=WEBAPP_PORT)
 
 if __name__ == "__main__":
-    main()
+    try:
+        print("--- Calling main() ---", file=sys.stderr)
+        sys.stderr.flush()
+        main()
+    except Exception as e:
+        print("!!! CRASH !!!", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
+        sys.stderr.flush()
+        raise  # Перевыбрасываем, чтобы процесс точно завершился с ошибкой
