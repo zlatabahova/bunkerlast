@@ -2,7 +2,7 @@ from aiogram import Router, types
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 import asyncpg
-from db import pool as db_pool_global
+from db import get_pool
 from config import ADMIN_ID
 from handlers.states import AddInfo
 
@@ -10,8 +10,8 @@ router = Router()
 
 @router.message(Command("info"))
 async def cmd_info(message: types.Message):
-    db_pool = db_pool_global
-    async with db_pool.acquire() as conn:
+    pool = get_pool()
+    async with pool.acquire() as conn:
         # Найдём комнату игрока (если игрок)
         player = await conn.fetchrow("SELECT room_code FROM players WHERE user_id = $1", message.from_user.id)
         if player:
@@ -61,8 +61,8 @@ async def cmd_info(message: types.Message):
 async def cmd_addinfo(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
         return
-    db_pool = db_pool_global
-    async with db_pool.acquire() as conn:
+    pool = get_pool()
+    async with pool.acquire() as conn:
         room = await conn.fetchrow("SELECT code FROM rooms WHERE is_active = TRUE")
         if not room:
             await message.answer("Нет активной комнаты.")
@@ -76,8 +76,8 @@ async def addinfo_player(message: types.Message, state: FSMContext):
     data = await state.get_data()
     room_code = data['room_code']
     name = message.text.strip()
-    db_pool = db_pool_global
-    async with db_pool.acquire() as conn:
+    pool = get_pool()
+    async with pool.acquire() as conn:
         player = await conn.fetchrow("SELECT name FROM players WHERE room_code = $1 AND name = $2", room_code, name)
         if not player:
             await message.answer("Игрок с таким именем не найден. Попробуйте ещё раз.")
@@ -102,8 +102,8 @@ async def addinfo_category(message: types.Message, state: FSMContext):
         return
     db_cat = cat_map[cat]
     data = await state.get_data()
-    db_pool = db_pool_global
-    async with db_pool.acquire() as conn:
+    pool = get_pool()
+    async with pool.acquire() as conn:
         # Добавляем категорию в массив revealed игрока (избегаем дублей)
         await conn.execute("UPDATE players SET revealed = array_append(revealed, $1) WHERE room_code = $2 AND name = $3 AND NOT ($1 = ANY(revealed))", db_cat, data['room_code'], data['player_name'])
     await message.answer(f"Категория {cat} раскрыта для игрока {data['player_name']}.")
