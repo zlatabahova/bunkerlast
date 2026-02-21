@@ -1,7 +1,7 @@
 from aiogram import Router, types, Bot
 from aiogram.filters import Command
 import asyncpg
-from db import pool as db_pool_global
+from db import get_pool
 from config import ADMIN_ID
 
 router = Router()
@@ -20,8 +20,8 @@ def format_player_card(player):
 
 @router.message(Command("me"))
 async def cmd_me(message: types.Message):
-    db_pool = db_pool_global
-    async with db_pool.acquire() as conn:
+    pool = get_pool()
+    async with pool.acquire() as conn:
         player = await conn.fetchrow("SELECT * FROM players WHERE user_id = $1", message.from_user.id)
         if not player:
             await message.answer("Вы не находитесь в комнате. Войдите через /room")
@@ -32,8 +32,8 @@ async def cmd_me(message: types.Message):
 @router.message(Command("card2"))
 async def cmd_card(message: types.Message, bot: Bot):
     card_num = 1 if message.text == "/card1" else 2
-    db_pool = db_pool_global
-    async with db_pool.acquire() as conn:
+    pool = get_pool()
+    async with pool.acquire() as conn:
         player = await conn.fetchrow("SELECT * FROM players WHERE user_id = $1", message.from_user.id)
         if not player:
             await message.answer("Вы не в комнате.")
