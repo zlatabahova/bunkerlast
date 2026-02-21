@@ -9,6 +9,13 @@ async def create_pool():
     pool = await asyncpg.create_pool(DATABASE_URL)
     return pool
 
+def get_pool():
+    """Возвращает текущий пул соединений. Если пул не инициализирован, вызывает исключение."""
+    global pool
+    if pool is None:
+        raise RuntimeError("Database pool not initialized. Call create_pool() first.")
+    return pool
+
 async def init_db(pool):
     async with pool.acquire() as conn:
         # Таблица комнат
@@ -50,9 +57,3 @@ async def init_db(pool):
                 UNIQUE(category, value)
             )
         ''')
-        # db.py
-def get_pool():
-    global pool
-    if pool is None:
-        raise RuntimeError("Database pool not initialized")
-    return pool
