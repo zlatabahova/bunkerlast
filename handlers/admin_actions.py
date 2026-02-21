@@ -5,7 +5,7 @@ from aiogram.fsm.context import FSMContext
 import asyncpg
 import random
 from config import ADMIN_ID, SPREADSHEET_ID
-from db import pool as db_pool_global
+from db import get_pool
 from google_sheets import load_from_sheets, update_pool
 from handlers.states import RandomChange, Swap, Shuffle, Change
 from utils import get_random_unique_values
@@ -14,9 +14,6 @@ pool_cache = {}  # будет заполнено при /reload или при с
 
 router = Router()
 
-async def get_db_pool():
-    return db_pool_global
-
 @router.message(Command("reload"))
 async def cmd_reload(message: types.Message, bot: Bot):
     if message.from_user.id != ADMIN_ID:
@@ -24,8 +21,8 @@ async def cmd_reload(message: types.Message, bot: Bot):
     await message.answer("🔄 Загрузка данных из Google Sheets...")
     try:
         categories = await load_from_sheets(SPREADSHEET_ID)
-        db_pool = await get_db_pool()
-        async with db_pool.acquire() as conn:
+        pool = get_pool()
+        async with pool.acquire() as conn:
             await update_pool(conn, categories)
         global pool_cache
         pool_cache = categories
@@ -49,8 +46,8 @@ async def cmd_cancel(message: types.Message, state: FSMContext):
 async def cmd_random(message: types.Message, state: FSMContext, bot: Bot):
     if message.from_user.id != ADMIN_ID:
         return
-    db_pool = await get_db_pool()
-    async with db_pool.acquire() as conn:
+    pool = get_pool()
+    async with pool.acquire() as conn:
         room = await conn.fetchrow("SELECT code FROM rooms WHERE is_active = TRUE")
         if not room:
             await message.answer("❌ Нет активной комнаты.")
@@ -61,10 +58,10 @@ async def cmd_random(message: types.Message, state: FSMContext, bot: Bot):
 
 @router.message(RandomChange.choosing_player)
 async def random_player(message: types.Message, state: FSMContext, bot: Bot):
-    db_pool = await get_db_pool()
+    pool = get_pool()
     data = await state.get_data()
     name = message.text.strip()
-    async with db_pool.acquire() as conn:
+    async with pool.acquire() as conn:
         player = await conn.fetchrow(
             "SELECT user_id, name FROM players WHERE room_code = $1 AND name = $2",
             data['room_code'], name
@@ -96,8 +93,8 @@ async def random_category(message: types.Message, state: FSMContext, bot: Bot):
     player_name = data['player_name']
     player_id = data['player_id']
 
-    db_pool = await get_db_pool()
-    async with db_pool.acquire() as conn:
+    pool = get_pool()
+    async with pool.acquire() as conn:
         player = await conn.fetchrow("SELECT * FROM players WHERE user_id = $1", player_id)
         if not player:
             await message.answer("❌ Ошибка: игрок не найден.")
@@ -169,8 +166,8 @@ async def random_category(message: types.Message, state: FSMContext, bot: Bot):
 async def cmd_swap(message: types.Message, state: FSMContext, bot: Bot):
     if message.from_user.id != ADMIN_ID:
         return
-    db_pool = await get_db_pool()
-    async with db_pool.acquire() as conn:
+    pool = get_pool()
+    async with pool.acquire() as conn:
         room = await conn.fetchrow("SELECT code FROM rooms WHERE is_active = TRUE")
         if not room:
             await message.answer("❌ Нет активной комнаты.")
@@ -181,10 +178,10 @@ async def cmd_swap(message: types.Message, state: FSMContext, bot: Bot):
 
 @router.message(Swap.choosing_player1)
 async def swap_player1(message: types.Message, state: FSMContext, bot: Bot):
-    db_pool = await get_db_pool()
+    pool = get_pool()
     data = await state.get_data()
     name1 = message.text.strip()
-    async with db_pool.acquire() as conn:
+    async with pool.acquire() as conn:
         player1 = await conn.fetchrow(
             "SELECT user_id, name FROM players WHERE room_code = $1 AND name = $2",
             data['room_code'], name1
@@ -198,13 +195,13 @@ async def swap_player1(message: types.Message, state: FSMContext, bot: Bot):
 
 @router.message(Swap.choosing_player2)
 async def swap_player2(message: types.Message, state: FSMContext, bot: Bot):
-    db_pool = await get_db_pool()
+    pool = get_pool()
     data = await state.get_data()
     name2 = message.text.strip()
     if name2 == data['player1_name']:
         await message.answer("❌ Игроки должны быть разными. Введите другое имя:")
         return
-    async with db_pool.acquire() as conn:
+    async with pool.acquire() as conn:
         player2 = await conn.fetchrow(
             "SELECT user_id, name FROM players WHERE room_code = $1 AND name = $2",
             data['room_code'], name2
@@ -238,8 +235,8 @@ async def swap_category(message: types.Message, state: FSMContext, bot: Bot):
     p1_name = data['player1_name']
     p2_name = data['player2_name']
 
-    db_pool = await get_db_pool()
-    async with db_pool.acquire() as conn:
+    pool = get_pool()
+    async with pool.acquire() as conn:
         p1 = await conn.fetchrow("SELECT * FROM players WHERE user_id = $1", p1_id)
         p2 = await conn.fetchrow("SELECT * FROM players WHERE user_id = $2", p2_id)
         if not p1 or not p2:
@@ -301,8 +298,8 @@ async def swap_category(message: types.Message, state: FSMContext, bot: Bot):
 async def cmd_shuffle(message: types.Message, state: FSMContext, bot: Bot):
     if message.from_user.id != ADMIN_ID:
         return
-    db_pool = await get_db_pool()
-    async with db_pool.acquire() as conn:
+    pool = get_pool()
+    async with pool.acquire() as conn:
         room = await conn.fetchrow("SELECT code FROM rooms WHERE is_active = TRUE")
         if not room:
             await message.answer("❌ Нет активной комнаты.")
@@ -329,8 +326,8 @@ async def shuffle_category(message: types.Message, state: FSMContext, bot: Bot):
     data = await state.get_data()
     room_code = data['room_code']
 
-    db_pool = await get_db_pool()
-    async with db_pool.acquire() as conn:
+    pool = get_pool()
+    async with pool.acquire() as conn:
         if db_cat == 'luggage':
             players = await conn.fetch(
                 "SELECT user_id FROM players WHERE room_code = $1",
@@ -383,8 +380,8 @@ async def shuffle_category(message: types.Message, state: FSMContext, bot: Bot):
 async def cmd_change(message: types.Message, state: FSMContext, bot: Bot):
     if message.from_user.id != ADMIN_ID:
         return
-    db_pool = await get_db_pool()
-    async with db_pool.acquire() as conn:
+    pool = get_pool()
+    async with pool.acquire() as conn:
         room = await conn.fetchrow("SELECT code FROM rooms WHERE is_active = TRUE")
         if not room:
             await message.answer("❌ Нет активной комнаты.")
@@ -395,10 +392,10 @@ async def cmd_change(message: types.Message, state: FSMContext, bot: Bot):
 
 @router.message(Change.choosing_player)
 async def change_player(message: types.Message, state: FSMContext, bot: Bot):
-    db_pool = await get_db_pool()
+    pool = get_pool()
     data = await state.get_data()
     name = message.text.strip()
-    async with db_pool.acquire() as conn:
+    async with pool.acquire() as conn:
         player = await conn.fetchrow(
             "SELECT user_id, name FROM players WHERE room_code = $1 AND name = $2",
             data['room_code'], name
@@ -456,9 +453,9 @@ async def apply_change(message: types.Message, state: FSMContext, bot: Bot, new_
     player_name = data['player_name']
     db_cat = data['db_cat']
     cat_ru = data['cat_ru']
-    db_pool = await get_db_pool()
+    pool = get_pool()
 
-    async with db_pool.acquire() as conn:
+    async with pool.acquire() as conn:
         if db_cat == 'luggage':
             if new_val2 is None:
                 data2 = await state.get_data()
