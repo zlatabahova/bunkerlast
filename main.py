@@ -10,6 +10,12 @@ from db import create_pool, init_db, pool as db_pool_global
 from google_sheets import load_from_sheets, update_pool
 from handlers import common, room, player, info, admin_actions
 
+import sys
+import traceback
+
+print("=== STARTING BOT ===", file=sys.stderr)
+sys.stderr.flush()
+
 logging.basicConfig(level=logging.INFO)
 
 async def on_startup(bot: Bot, db_pool: asyncpg.Pool):
