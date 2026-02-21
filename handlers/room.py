@@ -2,7 +2,7 @@ from aiogram import Router, types
 from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
 import asyncpg
-from db import pool as db_pool_global
+from db import get_pool
 from utils import generate_room_code, get_random_unique_values
 from config import ADMIN_ID
 from handlers.states import AddInfo
@@ -16,8 +16,8 @@ pool_cache = {}
 async def cmd_createroom(message: types.Message):
     if message.from_user.id != ADMIN_ID:
         return
-    db_pool = db_pool_global
-    async with db_pool.acquire() as conn:
+    pool = get_pool()
+    async with pool.acquire() as conn:
         existing = await conn.fetchval("SELECT code FROM rooms WHERE is_active = TRUE")
         if existing:
             await message.answer(f"Уже есть активная комната {existing}. Сначала закройте её.")
@@ -32,8 +32,8 @@ async def cmd_room(message: types.Message, command: CommandObject, state: FSMCon
         await message.answer("Укажите код комнаты: /room XYZW")
         return
     code = command.args.upper()
-    db_pool = db_pool_global
-    async with db_pool.acquire() as conn:
+    pool = get_pool()
+    async with pool.acquire() as conn:
         room = await conn.fetchrow("SELECT * FROM rooms WHERE code = $1 AND is_active = TRUE", code)
         if not room:
             await message.answer("Комната не найдена или уже закрыта.")
@@ -55,9 +55,9 @@ async def process_name(message: types.Message, state: FSMContext):
     data = await state.get_data()
     room_code = data['room_code']
     name = message.text.strip()
-    db_pool = db_pool_global
+    pool = get_pool()
     # Генерируем персонажа
-    async with db_pool.acquire() as conn:
+    async with pool.acquire() as conn:
         # Получаем уже использованные в комнате значения
         used = await conn.fetch("SELECT bio, prof, health, hobby, luggage1, luggage2, fact, special1, special2 FROM players WHERE room_code = $1", room_code)
         used_bio = [r['bio'] for r in used]
@@ -98,8 +98,8 @@ async def process_name(message: types.Message, state: FSMContext):
 async def cmd_closeroom(message: types.Message):
     if message.from_user.id != ADMIN_ID:
         return
-    db_pool = db_pool_global
-    async with db_pool.acquire() as conn:
+    pool = get_pool()
+    async with pool.acquire() as conn:
         room = await conn.fetchrow("SELECT code FROM rooms WHERE is_active = TRUE")
         if not room:
             await message.answer("Нет активной комнаты.")
@@ -112,8 +112,8 @@ async def cmd_closeroom(message: types.Message):
 async def cmd_players(message: types.Message):
     if message.from_user.id != ADMIN_ID:
         return
-    db_pool = db_pool_global
-    async with db_pool.acquire() as conn:
+    pool = get_pool()
+    async with pool.acquire() as conn:
         room = await conn.fetchrow("SELECT code FROM rooms WHERE is_active = TRUE")
         if not room:
             await message.answer("Нет активной комнаты.")
