@@ -50,3 +50,9 @@ async def init_db(pool):
                 UNIQUE(category, value)
             )
         ''')
+        # db.py
+def get_pool():
+    global pool
+    if pool is None:
+        raise RuntimeError("Database pool not initialized")
+    return pool
