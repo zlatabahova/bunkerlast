@@ -29,8 +29,8 @@ async def on_shutdown(bot: Bot):
     await bot.delete_webhook()
 
 async def handle_webhook(request):
-    print("!!! WEBHOOK HANDLER CALLED !!!", file=sys.stderr)
     import sys
+    print("!!! WEBHOOK HANDLER CALLED !!!", file=sys.stderr)
     sys.stderr.flush()
     update = types.Update(**await request.json())
     print(f"Received update ID: {update.update_id}", file=sys.stderr)
